@@ -1,0 +1,12 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+.env
+Thumbs.db
+coverage.txt
+*.out
+vendor/
+Desktop.ini
+*.prof
