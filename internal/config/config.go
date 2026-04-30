@@ -1,66 +1,55 @@
 package config
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// JobConfig defines the expected execution window for a single cron job.
-type JobConfig struct {
-	Name          string        `yaml:"name"`
-	Schedule      string        `yaml:"schedule"`
-	ExpectedStart string        `yaml:"expected_start"` // e.g. "02:00"
-	Window        time.Duration `yaml:"window"`         // allowed drift
-	AlertEmail    string        `yaml:"alert_email"`
+// Job describes a single monitored cron job.
+type Job struct {
+	Name             string        `yaml:"name"`
+	ExpectedDuration time.Duration `yaml:"expected_duration"`
+	Tolerance        time.Duration `yaml:"tolerance"`
 }
 
-// Config is the top-level configuration for cronwatch.
+// Config holds the full daemon configuration.
 type Config struct {
-	CheckInterval time.Duration `yaml:"check_interval"`
-	LogLevel      string        `yaml:"log_level"`
-	Jobs          []JobConfig   `yaml:"jobs"`
+	PollInterval time.Duration `yaml:"poll_interval"`
+	Jobs         []Job         `yaml:"jobs"`
+	WebhookURL   string        `yaml:"webhook_url"`
 }
 
-// Load reads and parses a YAML config file at the given path.
+const (
+	defaultPollInterval = 30 * time.Second
+	defaultTolerance    = 5 * time.Second
+)
+
+// Load reads and validates a YAML config file at path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config file %q: %w", path, err)
+		return nil, err
 	}
-
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file %q: %w", path, err)
+		return nil, err
 	}
-
-	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = defaultPollInterval
 	}
-
+	for i := range cfg.Jobs {
+		if cfg.Jobs[i].Name == "" {
+			return nil, errors.New("job missing required field: name")
+		}
+		if cfg.Jobs[i].ExpectedDuration <= 0 {
+			return nil, errors.New("job " + cfg.Jobs[i].Name + ": expected_duration must be positive")
+		}
+		if cfg.Jobs[i].Tolerance <= 0 {
+			cfg.Jobs[i].Tolerance = defaultTolerance
+		}
+	}
 	return &cfg, nil
-}
-
-// validate checks that required fields are present and sensible.
-func (c *Config) validate() error {
-	if c.CheckInterval <= 0 {
-		c.CheckInterval = 1 * time.Minute
-	}
-	if c.LogLevel == "" {
-		c.LogLevel = "info"
-	}
-	for i, job := range c.Jobs {
-		if job.Name == "" {
-			return fmt.Errorf("job[%d]: name is required", i)
-		}
-		if job.Schedule == "" {
-			return fmt.Errorf("job %q: schedule is required", job.Name)
-		}
-		if job.Window <= 0 {
-			c.Jobs[i].Window = 5 * time.Minute
-		}
-	}
-	return nil
 }

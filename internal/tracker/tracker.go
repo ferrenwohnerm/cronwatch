@@ -1,72 +1,69 @@
 package tracker
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
 
-// JobRecord holds timing information for a single cron job execution.
-type JobRecord struct {
-	JobName   string
-	StartedAt time.Time
-	FinishedAt *time.Time
-	Duration  *time.Duration
+// run holds timing data for a single job execution.
+type run struct {
+	start    time.Time
+	duration time.Duration
+	done     bool
 }
 
-// Tracker maintains in-memory state of recent job executions.
+// Tracker records start/finish times for named cron jobs.
 type Tracker struct {
-	mu      sync.RWMutex
-	records map[string]*JobRecord
+	mu   sync.Mutex
+	runs map[string]*run
 }
 
 // New returns an initialised Tracker.
 func New() *Tracker {
-	return &Tracker{
-		records: make(map[string]*JobRecord),
-	}
+	return &Tracker{runs: make(map[string]*run)}
 }
 
-// Start records the start time for a named job.
-func (t *Tracker) Start(jobName string) {
+// Start records the beginning of a job execution.
+func (t *Tracker) Start(name string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.records[jobName] = &JobRecord{
-		JobName:   jobName,
-		StartedAt: time.Now(),
-	}
+	t.runs[name] = &run{start: time.Now()}
 }
 
-// Finish records the completion time for a named job and computes its duration.
-// It returns false if no corresponding Start was recorded.
-func (t *Tracker) Finish(jobName string) bool {
+// Finish marks a job as complete. An optional override duration may be
+// supplied (non-zero) to inject a duration directly (useful for testing).
+func (t *Tracker) Finish(name string, override time.Duration) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	rec, ok := t.records[jobName]
+	r, ok := t.runs[name]
 	if !ok {
-		return false
+		return errors.New("tracker: no active run for job " + name)
 	}
-	now := time.Now()
-	d := now.Sub(rec.StartedAt)
-	rec.FinishedAt = &now
-	rec.Duration = &d
-	return true
+	if override > 0 {
+		r.duration = override
+	} else {
+		r.duration = time.Since(r.start)
+	}
+	r.done = true
+	return nil
 }
 
-// Get returns a copy of the JobRecord for the given job name.
-// The second return value is false when no record exists.
-func (t *Tracker) Get(jobName string) (JobRecord, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	rec, ok := t.records[jobName]
-	if !ok {
-		return JobRecord{}, false
-	}
-	return *rec, true
-}
-
-// Delete removes the record for the given job name.
-func (t *Tracker) Delete(jobName string) {
+// Delete removes all tracking state for a job.
+func (t *Tracker) Delete(name string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.records, jobName)
+	delete(t.runs, name)
+}
+
+// LastDuration returns the recorded duration for the most recent completed
+// run of name, or an error if no completed run exists.
+func (t *Tracker) LastDuration(name string) (time.Duration, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	r, ok := t.runs[name]
+	if !ok || !r.done {
+		return 0, errors.New("tracker: no completed run for job " + name)
+	}
+	return r.duration, nil
 }
