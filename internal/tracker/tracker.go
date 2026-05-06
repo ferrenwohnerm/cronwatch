@@ -6,64 +6,72 @@ import (
 	"time"
 )
 
-// run holds timing data for a single job execution.
-type run struct {
-	start    time.Time
-	duration time.Duration
-	done     bool
+// Entry holds the state of a tracked cron job.
+type Entry struct {
+	JobName   string
+	StartedAt time.Time
+	Expected  time.Duration
+	Running   bool
 }
 
-// Tracker records start/finish times for named cron jobs.
+// Tracker stores in-flight job state.
 type Tracker struct {
-	mu   sync.Mutex
-	runs map[string]*run
+	mu      sync.RWMutex
+	entries map[string]*Entry
 }
 
 // New returns an initialised Tracker.
 func New() *Tracker {
-	return &Tracker{runs: make(map[string]*run)}
+	return &Tracker{entries: make(map[string]*Entry)}
 }
 
-// Start records the beginning of a job execution.
-func (t *Tracker) Start(name string) {
+// Start records that a job has begun.
+func (t *Tracker) Start(name string, expected time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.runs[name] = &run{start: time.Now()}
+	t.entries[name] = &Entry{
+		JobName:   name,
+		StartedAt: time.Now(),
+		Expected:  expected,
+		Running:   true,
+	}
 }
 
-// Finish marks a job as complete. An optional override duration may be
-// supplied (non-zero) to inject a duration directly (useful for testing).
-func (t *Tracker) Finish(name string, override time.Duration) error {
+// Finish marks a job complete and returns elapsed duration.
+func (t *Tracker) Finish(name string) (time.Duration, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	r, ok := t.runs[name]
-	if !ok {
-		return errors.New("tracker: no active run for job " + name)
+	e, ok := t.entries[name]
+	if !ok || !e.Running {
+		return 0, errors.New("no running entry for job: " + name)
 	}
-	if override > 0 {
-		r.duration = override
-	} else {
-		r.duration = time.Since(r.start)
-	}
-	r.done = true
-	return nil
+	elapsed := time.Since(e.StartedAt)
+	e.Running = false
+	return elapsed, nil
 }
 
-// Delete removes all tracking state for a job.
+// Get retrieves a job entry (running or finished).
+func (t *Tracker) Get(name string) (*Entry, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	e, ok := t.entries[name]
+	return e, ok
+}
+
+// Delete removes a job entry.
 func (t *Tracker) Delete(name string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.runs, name)
+	delete(t.entries, name)
 }
 
-// LastDuration returns the recorded duration for the most recent completed
-// run of name, or an error if no completed run exists.
-func (t *Tracker) LastDuration(name string) (time.Duration, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	r, ok := t.runs[name]
-	if !ok || !r.done {
-		return 0, errors.New("tracker: no completed run for job " + name)
+// Snapshot returns a copy of all current entries.
+func (t *Tracker) Snapshot() []Entry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]Entry, 0, len(t.entries))
+	for _, e := range t.entries {
+		out = append(out, *e)
 	}
-	return r.duration, nil
+	return out
 }

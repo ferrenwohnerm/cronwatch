@@ -4,21 +4,31 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/example/cronwatch/internal/alert"
+	"github.com/example/cronwatch/internal/tracker"
 )
 
-// NewRouter constructs the HTTP mux wiring all API routes together.
-// It accepts a Handler (status/healthz), a History recorder, and a Metrics
-// recorder so each subsystem registers its own route.
-func NewRouter(h *Handler, hist *History, m *Metrics, logger *log.Logger, out io.Writer) http.Handler {
+// NewRouter wires all API routes and returns a ready http.Handler.
+func NewRouter(t *tracker.Tracker, m *alert.Manager, logger *log.Logger, out io.Writer) http.Handler {
 	if logger == nil {
 		logger = log.New(out, "", log.LstdFlags)
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", handleHealthz)
-	mux.HandleFunc("/status", h.handleStatus)
-	mux.HandleFunc("/history", hist.handleHistory)
-	mux.HandleFunc("/metrics", m.handleMetrics)
+
+	h := NewHandler(t)
+	mux.Handle("/healthz", h)
+	mux.Handle("/status", h)
+
+	hist := NewHistory(64)
+	mux.Handle("/history", hist)
+
+	met := NewMetrics()
+	mux.Handle("/metrics", met)
+
+	nfy := NewNotifyHandler(t, m)
+	mux.Handle("/notify", nfy)
 
 	return RecoveryMiddleware(LoggingMiddleware(mux, logger))
 }
