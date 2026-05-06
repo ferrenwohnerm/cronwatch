@@ -1,24 +1,25 @@
 package api
 
 import (
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/user/cronwatch/internal/tracker"
 )
 
-// NewRouter builds and returns the root HTTP mux with all routes registered
-// and middleware applied.
-func NewRouter(tr *tracker.Tracker, logger *log.Logger) http.Handler {
-	h := NewHandler(tr)
+// NewRouter builds the HTTP mux for cronwatch, wiring all routes.
+func NewRouter(t *tracker.Tracker, h *History, logger *log.Logger, out io.Writer) http.Handler {
+	if logger == nil {
+		logger = log.New(out, "", log.LstdFlags)
+	}
 
+	handler := NewHandler(t)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", h.handleHealthz)
-	mux.HandleFunc("/status", h.handleStatus)
 
-	var handler http.Handler = mux
-	handler = LoggingMiddleware(logger, handler)
-	handler = RecoveryMiddleware(logger, handler)
+	mux.HandleFunc("/healthz", handleHealthz)
+	mux.HandleFunc("/status", handler.handleStatus)
+	mux.HandleFunc("/history", handleHistory(h))
 
-	return handler
+	return RecoveryMiddleware(LoggingMiddleware(mux, logger))
 }
