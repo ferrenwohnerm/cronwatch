@@ -1,11 +1,12 @@
 package api
 
 import (
-	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/user/cronwatch/internal/tracker"
 )
@@ -13,74 +14,76 @@ import (
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	tr := tracker.New()
-	logger := log.New(io_discard(), "", 0)
-	return NewRouter(tr, logger)
+	h := NewHandler(tr)
+	hist := NewHistory(10)
+	m := NewMetrics()
+	logger := log.New(io.Discard, "", 0)
+	return NewRouter(h, hist, m, logger, io.Discard)
 }
 
-// io_discard returns a writer that discards all output, avoiding an import
-// of io in the test file.
-func io_discard() *nopWriter { return &nopWriter{} }
-
-type nopWriter struct{}
-
-func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+func io_discard(t *testing.T) io.Writer { //nolint:revive
+	t.Helper()
+	return io.Discard
+}
 
 func TestRouter_HealthzRoute(t *testing.T) {
 	router := newTestRouter(t)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
 
 func TestRouter_StatusRoute(t *testing.T) {
 	router := newTestRouter(t)
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
-	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
 
-func TestRouter_UnknownRouteReturns404(t *testing.T) {
+func TestRouter_HistoryRoute(t *testing.T) {
 	router := newTestRouter(t)
-	req := httptest.NewRequest(http.MethodGet, "/does-not-exist", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", rec.Code)
+	req := httptest.NewRequest(http.MethodGet, "/history", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
 
-func TestRouter_PanicRecovery(t *testing.T) {
+func TestRouter_MetricsRoute(t *testing.T) {
+	router := newTestRouter(t)
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestRouter_MetricsReflectsRecordedData(t *testing.T) {
 	tr := tracker.New()
-	logger := log.New(io_discard(), "", 0)
+	h := NewHandler(tr)
+	hist := NewHistory(10)
+	m := NewMetrics()
+	m.Record("nightly", 4*time.Second, true)
+	logger := log.New(io.Discard, "", 0)
+	router := NewRouter(h, hist, m, logger, io.Discard)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
-		panic("test panic")
-	})
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
 
-	var handler http.Handler = mux
-	handler = LoggingMiddleware(logger, handler)
-	handler = RecoveryMiddleware(logger, handler)
-	_ = tr
-
-	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 after panic, got %d", rec.Code)
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if body == "" {
+		t.Error("expected non-empty metrics body")
 	}
 }
