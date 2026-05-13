@@ -51,6 +51,19 @@ func TestExitCodeManager_Snapshot(t *testing.T) {
 	}
 }
 
+func TestExitCodeManager_SnapshotIsIsolated(t *testing.T) {
+	m := NewExitCodeManager()
+	m.Record("jobA", 0)
+
+	snap := m.Snapshot()
+	snap[0].Code = 99
+
+	e, _ := m.Get("jobA")
+	if e.Code != 0 {
+		t.Errorf("snapshot mutation affected manager state: got code %d", e.Code)
+	}
+}
+
 func TestHandleExitCodes_PostAndGet(t *testing.T) {
 	m := NewExitCodeManager()
 
