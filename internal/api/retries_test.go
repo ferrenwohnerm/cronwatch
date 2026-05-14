@@ -50,6 +50,17 @@ func TestRetryManager_EvictsWhenFull(t *testing.T) {
 	}
 }
 
+func TestRetryManager_AttemptIncrements(t *testing.T) {
+	rm := NewRetryManager(10)
+
+	for i := 1; i <= 5; i++ {
+		rec := rm.Record("deploy", "timeout")
+		if rec.Attempt != i {
+			t.Errorf("expected attempt %d, got %d", i, rec.Attempt)
+		}
+	}
+}
+
 func TestHandleRetries_ReturnsJSON(t *testing.T) {
 	rm := NewRetryManager(10)
 	rm.Record("sync", "drift")
